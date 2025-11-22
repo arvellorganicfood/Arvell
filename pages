@@ -1,0 +1,7 @@
+index.html        (Home / product page)
+benefits.html     (Ingredients & benefits)
+offers.html       (Special offers)
+register.html     (User registration)
+styles.css        (App styling)
+app.js            (Basic functions)
+assets/           (Folder for images)
