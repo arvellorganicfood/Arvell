@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Two SIM-card glyphs with a swap arrow, drawn on the adaptive safe zone. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,30 h18 l8,8 v22 h-26 z M40,30 m4,4 h10 l5,5 v15 h-15 z" />
+    <path
+        android:fillColor="#CFF5E7"
+        android:pathData="M50,48 h18 l8,8 v22 h-26 z M50,48 m4,4 h10 l5,5 v15 h-15 z" />
+    <path
+        android:fillColor="#FFD166"
+        android:pathData="M46,66 l-6,6 l6,6 v-4 h10 v-4 h-10 z" />
+</vector>

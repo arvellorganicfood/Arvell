@@ -1,0 +1,4 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Compose draws the UI; a minimal Material3-compatible base theme is enough. -->
+    <style name="Theme.SimDataSwitcher" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

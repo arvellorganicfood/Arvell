@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">SIM Data Switcher</string>
+    <string name="accessibility_label">SIM Data Switcher — auto switching</string>
+    <string name="accessibility_description">Allows the app to open the SIM/mobile-data settings screen and switch the active data SIM automatically when the current SIM loses internet. The app only interacts with the system Settings screens needed to switch SIMs.</string>
+
+    <string name="notif_channel_name">Monitoring</string>
+    <string name="notif_channel_desc">Persistent notification while the data SIM is being monitored.</string>
+    <string name="notif_monitoring_title">Monitoring data connection</string>
+    <string name="notif_monitoring_text">Watching the active SIM and switching on signal loss.</string>
+</resources>
