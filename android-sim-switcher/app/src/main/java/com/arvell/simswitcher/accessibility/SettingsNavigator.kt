@@ -136,6 +136,65 @@ object SettingsNavigator {
     fun scrollForward(node: AccessibilityNodeInfo?): Boolean =
         node?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) == true
 
+    /** True if the current screen looks like the data-SIM screen. */
+    fun hasMobileDataHeader(root: AccessibilityNodeInfo?): Boolean =
+        root != null && findFirstByTexts(root, MOBILE_DATA_HEADERS) != null
+
+    /**
+     * Human-readable dump of the data-SIM control area, for on-device diagnosis
+     * when automatic matching fails. Focuses on the band beneath the "Mobile
+     * Data" header (the relevant region); if the header isn't found, lists all
+     * labelled/clickable nodes so the real wording can be discovered.
+     */
+    fun describeDataScreen(root: AccessibilityNodeInfo?): String {
+        root ?: return "No active window."
+        val sb = StringBuilder()
+        val header = findFirstByTexts(root, MOBILE_DATA_HEADERS)
+        if (header == null) {
+            sb.append("'Mobile Data' header NOT found. All labelled/clickable nodes:\n\n")
+            for (node in collectAll(root)) {
+                val line = describeNode(node)
+                if (line != null) sb.append(line).append('\n')
+            }
+            return sb.toString().take(MAX_DUMP)
+        }
+        val hr = Rect().also { header.getBoundsInScreen(it) }
+        val lower = BOUNDARY_HEADERS
+            .mapNotNull { findFirstByTexts(root, listOf(it)) }
+            .map { Rect().also { r -> it.getBoundsInScreen(r) } }
+            .filter { it.top >= hr.bottom }
+            .minByOrNull { it.top }
+        sb.append("Header 'Mobile Data' bounds=$hr\n")
+        sb.append("Lower boundary=${lower ?: "none"}\n\n")
+        sb.append("Nodes in the Mobile Data band:\n")
+        val lowerTop = lower?.top ?: Int.MAX_VALUE
+        for (node in collectAll(root)) {
+            val r = Rect().also { node.getBoundsInScreen(it) }
+            if (r.centerY() > hr.bottom && r.centerY() < lowerTop) {
+                describeNode(node, force = true)?.let { sb.append(it).append('\n') }
+            }
+        }
+        return sb.toString().take(MAX_DUMP)
+    }
+
+    /** One compact line per node; null when there's nothing worth showing. */
+    private fun describeNode(node: AccessibilityNodeInfo, force: Boolean = false): String? {
+        val text = node.text?.toString().orEmpty()
+        val desc = node.contentDescription?.toString().orEmpty()
+        val id = node.viewIdResourceName?.substringAfterLast('/').orEmpty()
+        if (!force && text.isBlank() && desc.isBlank() && !node.isClickable) return null
+        val r = Rect().also { node.getBoundsInScreen(it) }
+        val cls = node.className?.toString()?.substringAfterLast('.').orEmpty()
+        return buildString {
+            append(if (node.isClickable) "[CLICK] " else "[     ] ")
+            append(cls)
+            if (text.isNotBlank()) append(" text='").append(text).append('\'')
+            if (desc.isNotBlank()) append(" desc='").append(desc).append('\'')
+            if (id.isNotBlank()) append(" id=").append(id)
+            append(" @").append(r.toShortString())
+        }
+    }
+
     private fun findFirstByTexts(
         root: AccessibilityNodeInfo,
         keywords: List<String>,
@@ -164,4 +223,5 @@ object SettingsNavigator {
         node.text?.toString() ?: node.contentDescription?.toString() ?: ""
 
     private const val MAX_ASCEND = 6
+    private const val MAX_DUMP = 6000
 }

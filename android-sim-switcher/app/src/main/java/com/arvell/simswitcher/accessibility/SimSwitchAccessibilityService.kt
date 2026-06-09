@@ -36,6 +36,7 @@ class SimSwitchAccessibilityService : AccessibilityService() {
     @Volatile private var pendingLabel: String? = null
     @Volatile private var pendingSubId: Int = -1
     @Volatile private var pendingSlotIndex: Int = -1
+    @Volatile private var pendingDiagnostic: Boolean = false
     @Volatile private var scrollAttempts: Int = 0
     @Volatile private var startedAt: Long = 0L
 
@@ -51,6 +52,7 @@ class SimSwitchAccessibilityService : AccessibilityService() {
         pendingLabel = request.targetLabel
         pendingSubId = request.targetSubId
         pendingSlotIndex = request.targetSlotIndex
+        pendingDiagnostic = request.diagnostic
         scrollAttempts = 0
         startedAt = System.currentTimeMillis()
         openSimSettings()
@@ -97,22 +99,35 @@ class SimSwitchAccessibilityService : AccessibilityService() {
         val label = pendingLabel.orEmpty()
         val root = rootInActiveWindow ?: return
 
-        // 1) On the SIM & Network screen: tap the data-slot button.
-        val slotButton = SettingsNavigator.findDataSlotButton(root, slot1Based, label)
-        if (slotButton != null) {
-            tapNode(slotButton)
-            finishSuccess()
+        // Diagnostic mode: when we reach the SIM screen, dump it instead of tapping.
+        if (pendingDiagnostic) {
+            if (SettingsNavigator.hasMobileDataHeader(root)) {
+                finishDiagnostic(SettingsNavigator.describeDataScreen(root))
+            } else {
+                navigateOrScroll(root)
+            }
             return
         }
 
-        // 2) Elsewhere (e.g. Settings home): drill into the SIM screen.
+        // 1) On the SIM & Network screen: tap the data-slot button.
+        val slotButton = SettingsNavigator.findDataSlotButton(root, slot1Based, label)
+        if (slotButton != null) {
+            val tapped = tapNode(slotButton)
+            finishSuccess(tapped)
+            return
+        }
+
+        // 2) Elsewhere (e.g. Settings home), then 3) scroll.
+        navigateOrScroll(root)
+    }
+
+    /** Drill into the SIM screen, or scroll the current screen to reveal it. */
+    private fun navigateOrScroll(root: AccessibilityNodeInfo) {
         val entry = SettingsNavigator.findNavigationEntry(root)
         if (entry != null) {
             SettingsNavigator.click(entry)
             return
         }
-
-        // 3) Target not visible yet: scroll to reveal it, bounded.
         if (scrollAttempts < MAX_SCROLL_ATTEMPTS) {
             val scrollable = SettingsNavigator.findScrollable(root)
             if (scrollable != null && SettingsNavigator.scrollForward(scrollable)) {
@@ -121,26 +136,44 @@ class SimSwitchAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun finishDiagnostic(dump: String) {
+        val subId = pendingSubId
+        clearPending()
+        SwitchRequestBus.diagnostic.value = dump
+        scope.launch {
+            SwitchRequestBus.reportResult(
+                SwitchRequestBus.SwitchResult(subId, success = true, detail = "Diagnostic captured"),
+            )
+        }
+        performGlobalAction(GLOBAL_ACTION_HOME)
+    }
+
     /** Click the node; if it isn't natively clickable, dispatch a gesture tap. */
-    private fun tapNode(node: AccessibilityNodeInfo) {
-        if (SettingsNavigator.click(node)) return
+    private fun tapNode(node: AccessibilityNodeInfo): Boolean {
+        if (SettingsNavigator.click(node)) return true
         val (x, y) = SettingsNavigator.centerOf(node)
         val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, TAP_DURATION_MS))
             .build()
-        dispatchGesture(gesture, null, null)
+        return dispatchGesture(gesture, null, null)
     }
 
-    private fun finishSuccess() {
+    private fun finishSuccess(tapped: Boolean) {
         val subId = pendingSubId
         clearPending()
         scope.launch {
             SwitchRequestBus.reportResult(
-                SwitchRequestBus.SwitchResult(subId, success = true, detail = "Selected target SIM slot"),
+                SwitchRequestBus.SwitchResult(
+                    subId,
+                    success = tapped,
+                    detail = if (tapped) "Selected target SIM slot" else "Found the control but the tap was rejected",
+                ),
             )
+            // Let the toggle register before leaving the screen.
+            delay(HOME_DELAY_MS)
+            performGlobalAction(GLOBAL_ACTION_HOME)
         }
-        performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
     private fun reportFailure(detail: String) {
@@ -157,6 +190,7 @@ class SimSwitchAccessibilityService : AccessibilityService() {
         pendingLabel = null
         pendingSubId = -1
         pendingSlotIndex = -1
+        pendingDiagnostic = false
     }
 
     override fun onInterrupt() = Unit
@@ -172,5 +206,6 @@ class SimSwitchAccessibilityService : AccessibilityService() {
         const val TIMEOUT_MS = 8_000L
         const val MAX_SCROLL_ATTEMPTS = 6
         const val TAP_DURATION_MS = 60L
+        const val HOME_DELAY_MS = 700L
     }
 }

@@ -1,6 +1,7 @@
 package com.arvell.simswitcher.service
 
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
@@ -21,6 +22,8 @@ object SwitchRequestBus {
         val targetSlotIndex: Int,
         val targetLabel: String,
         val reason: String,
+        /** When true, dump the SIM screen's node tree instead of switching. */
+        val diagnostic: Boolean = false,
         val requestedAt: Long = System.currentTimeMillis(),
     )
 
@@ -36,6 +39,9 @@ object SwitchRequestBus {
 
     private val _results = MutableSharedFlow<SwitchResult>(extraBufferCapacity = 4)
     val results: SharedFlow<SwitchResult> = _results.asSharedFlow()
+
+    /** Latest diagnostic dump of the SIM screen's accessibility node tree. */
+    val diagnostic = MutableStateFlow<String?>(null)
 
     /** True while an accessibility service instance is bound and able to switch. */
     @Volatile

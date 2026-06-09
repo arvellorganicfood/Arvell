@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -63,6 +64,7 @@ private fun MainScreen() {
     var accessibilityOn by remember { mutableStateOf(isAccessibilityEnabled(context)) }
     var dataSubId by remember { mutableStateOf(simInfo.activeDataSubId()) }
     var manualMsg by remember { mutableStateOf<String?>(null) }
+    val diagnostic by SwitchRequestBus.diagnostic.collectAsStateWithLifecycle()
 
     val permLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -156,6 +158,40 @@ private fun MainScreen() {
                     onRefresh = {
                         sims = simInfo.activeSims()
                         dataSubId = simInfo.activeDataSubId()
+                    },
+                )
+
+                DiagnosticCard(
+                    accessibilityOn = accessibilityOn,
+                    dump = diagnostic,
+                    onScan = {
+                        manualMsg = "Scanning SIM screen…"
+                        val target = sims.firstOrNull { it.subscriptionId != dataSubId }
+                            ?: sims.firstOrNull()
+                        if (target != null) {
+                            scope.launch {
+                                SwitchRequestBus.requestSwitch(
+                                    SwitchRequestBus.SwitchRequest(
+                                        targetSubId = target.subscriptionId,
+                                        targetSlotIndex = target.slotIndex,
+                                        targetLabel = target.label,
+                                        reason = "Diagnostic scan",
+                                        diagnostic = true,
+                                    ),
+                                )
+                            }
+                        }
+                    },
+                    onShare = { text ->
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, "SIM Data Switcher diagnostic")
+                            putExtra(Intent.EXTRA_TEXT, text)
+                        }
+                        context.startActivity(
+                            Intent.createChooser(send, "Share diagnostic")
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
                     },
                 )
             }
@@ -286,6 +322,54 @@ private fun SwitchNowCard(
 
             lastMessage?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+/**
+ * Diagnostic helper: asks the accessibility service to open the SIM screen and
+ * dump its node tree, so the data-toggle layout can be inspected on-device when
+ * automatic matching fails. The dump can be shared as text for tuning.
+ */
+@Composable
+private fun DiagnosticCard(
+    accessibilityOn: Boolean,
+    dump: String?,
+    onScan: () -> Unit,
+    onShare: (String) -> Unit,
+) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Diagnostic", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "If the switch button opens Settings but taps nothing, run this scan "
+                    + "and share the result so the matching can be fixed.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(
+                onClick = onScan,
+                enabled = accessibilityOn,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Scan SIM screen")
+            }
+            if (!dump.isNullOrBlank()) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Result", style = MaterialTheme.typography.labelLarge)
+                    TextButton(onClick = { onShare(dump) }) { Text("Share") }
+                }
+                SelectionContainer {
+                    Text(
+                        dump,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    )
+                }
             }
         }
     }
