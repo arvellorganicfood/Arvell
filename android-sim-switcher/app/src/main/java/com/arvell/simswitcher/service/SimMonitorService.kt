@@ -87,6 +87,7 @@ class SimMonitorService : Service() {
                 SwitchRequestBus.requestSwitch(
                     SwitchRequestBus.SwitchRequest(
                         targetSubId = decision.targetSubId,
+                        targetSlotIndex = target?.slotIndex ?: 0,
                         targetLabel = target?.label ?: "SIM",
                         reason = decision.reason,
                     ),

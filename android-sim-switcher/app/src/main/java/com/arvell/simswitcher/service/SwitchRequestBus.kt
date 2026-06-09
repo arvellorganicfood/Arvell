@@ -17,6 +17,8 @@ object SwitchRequestBus {
 
     data class SwitchRequest(
         val targetSubId: Int,
+        /** 0-based SIM slot of the target; the data toggle is labelled by slot. */
+        val targetSlotIndex: Int,
         val targetLabel: String,
         val reason: String,
         val requestedAt: Long = System.currentTimeMillis(),

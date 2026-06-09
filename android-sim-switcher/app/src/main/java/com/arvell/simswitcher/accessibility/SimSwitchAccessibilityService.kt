@@ -1,9 +1,12 @@
 package com.arvell.simswitcher.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.graphics.Path
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import com.arvell.simswitcher.service.SwitchRequestBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,20 +14,20 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * Executes data-SIM switches by driving the system Settings UI, since no public
  * API lets a normal app change the default data subscription.
  *
- * Flow for one request:
- *  1. Open the mobile-network settings screen via a deep-link intent.
- *  2. Wait for the window, then locate the data-SIM control and the target SIM
- *     option using [SettingsNavigator] heuristics.
- *  3. Click to select the target SIM, then report success/failure on the bus.
+ * Flow for one request on the itel P55 (itelOS, Android 13):
+ *  1. Open Settings, navigate into "SIM & Network Settings".
+ *  2. Under the "Mobile Data" header, find the segmented button for the target
+ *     SIM *slot* (1 or 2) — scoped to the band between "Mobile Data" and "SMS".
+ *  3. Tap it (node click, falling back to a gesture tap for custom widgets),
+ *     then report success/failure on the bus.
  *
- * Because Settings layouts vary by OEM, this is best-effort: every step reports
- * a clear failure detail so the UI can tell the user to switch manually.
+ * The service re-runs the attempt on every relevant window change, so the
+ * multi-screen navigation happens naturally as Settings transitions.
  */
 class SimSwitchAccessibilityService : AccessibilityService() {
 
@@ -32,86 +35,101 @@ class SimSwitchAccessibilityService : AccessibilityService() {
 
     @Volatile private var pendingLabel: String? = null
     @Volatile private var pendingSubId: Int = -1
+    @Volatile private var pendingSlotIndex: Int = -1
     @Volatile private var scrollAttempts: Int = 0
+    @Volatile private var startedAt: Long = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         SwitchRequestBus.accessibilityConnected = true
         scope.launch {
-            SwitchRequestBus.requests.collect { request ->
-                handleRequest(request)
-            }
+            SwitchRequestBus.requests.collect { request -> handleRequest(request) }
         }
     }
 
     private suspend fun handleRequest(request: SwitchRequestBus.SwitchRequest) {
         pendingLabel = request.targetLabel
         pendingSubId = request.targetSubId
+        pendingSlotIndex = request.targetSlotIndex
         scrollAttempts = 0
-        openMobileNetworkSettings()
-        // Give Settings time to render; the actual click happens in onAccessibilityEvent
-        // as windows change, but we also attempt once after a short delay as a fallback.
+        startedAt = System.currentTimeMillis()
+        openSimSettings()
+        // Fallback nudge in case no accessibility event fires after the screen settles.
         delay(SETTLE_MS)
         attemptSwitch()
+        // Hard timeout so a request never hangs forever.
+        delay(TIMEOUT_MS)
+        if (pendingSlotIndex != -1 && System.currentTimeMillis() - startedAt >= TIMEOUT_MS) {
+            reportFailure("Timed out locating the data-SIM control — switch manually")
+        }
     }
 
-    private fun openMobileNetworkSettings() {
-        // ACTION_NETWORK_OPERATOR_SETTINGS lands on mobile networks / SIM selection
-        // on most devices; fall back to general wireless settings.
-        val intent = Intent(Settings.ACTION_NETWORK_OPERATOR_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        try {
-            startActivity(intent)
-        } catch (_: Exception) {
+    private fun openSimSettings() {
+        // Settings home is the most reliable entry point across Transsion builds;
+        // we then click "SIM & Network Settings" via the navigator. The operator
+        // deep-link is only a fallback in case home cannot be opened.
+        val candidates = listOf(
+            Intent(Settings.ACTION_SETTINGS),
+            Intent(Settings.ACTION_NETWORK_OPERATOR_SETTINGS),
+        )
+        for (intent in candidates) {
             try {
-                startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return
             } catch (_: Exception) {
-                reportFailure("Could not open mobile-network settings")
+                // try next
             }
         }
+        reportFailure("Could not open Settings")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (pendingLabel == null) return
-        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-            event?.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-        ) {
-            attemptSwitch()
+        if (pendingSlotIndex == -1) return
+        when (event?.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> attemptSwitch()
         }
     }
 
     private fun attemptSwitch() {
-        val label = pendingLabel ?: return
+        if (pendingSlotIndex == -1) return
+        val slot1Based = pendingSlotIndex + 1
+        val label = pendingLabel.orEmpty()
         val root = rootInActiveWindow ?: return
 
-        // If we are on a screen that lists the SIMs for data, click the target SIM.
-        val simOption = SettingsNavigator.findSimOptionByLabel(root, label)
-        if (simOption != null && SettingsNavigator.click(SettingsNavigator.firstClickable(simOption) ?: simOption)) {
+        // 1) On the SIM & Network screen: tap the data-slot button.
+        val slotButton = SettingsNavigator.findDataSlotButton(root, slot1Based, label)
+        if (slotButton != null) {
+            tapNode(slotButton)
             finishSuccess()
             return
         }
 
-        // Otherwise try to open the data-SIM selection entry first.
-        val entry = SettingsNavigator.findDataSettingEntry(root)
+        // 2) Elsewhere (e.g. Settings home): drill into the SIM screen.
+        val entry = SettingsNavigator.findNavigationEntry(root)
         if (entry != null) {
             SettingsNavigator.click(entry)
-            // Next window change will re-enter attemptSwitch() and find the SIM option.
             return
         }
 
-        // Target not visible yet (e.g. the row is below the fold on the itelOS
-        // "SIM cards & mobile networks" page): scroll and let the next content
-        // change re-trigger us. Bounded so we never loop forever.
+        // 3) Target not visible yet: scroll to reveal it, bounded.
         if (scrollAttempts < MAX_SCROLL_ATTEMPTS) {
             val scrollable = SettingsNavigator.findScrollable(root)
             if (scrollable != null && SettingsNavigator.scrollForward(scrollable)) {
                 scrollAttempts++
-                return
             }
-        } else {
-            reportFailure("Could not locate the data-SIM control automatically — switch manually")
         }
+    }
+
+    /** Click the node; if it isn't natively clickable, dispatch a gesture tap. */
+    private fun tapNode(node: AccessibilityNodeInfo) {
+        if (SettingsNavigator.click(node)) return
+        val (x, y) = SettingsNavigator.centerOf(node)
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, TAP_DURATION_MS))
+            .build()
+        dispatchGesture(gesture, null, null)
     }
 
     private fun finishSuccess() {
@@ -119,10 +137,10 @@ class SimSwitchAccessibilityService : AccessibilityService() {
         clearPending()
         scope.launch {
             SwitchRequestBus.reportResult(
-                SwitchRequestBus.SwitchResult(subId, success = true, detail = "Selected target SIM"),
+                SwitchRequestBus.SwitchResult(subId, success = true, detail = "Selected target SIM slot"),
             )
         }
-        performGlobalAction(GLOBAL_ACTION_BACK)
+        performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
     private fun reportFailure(detail: String) {
@@ -138,6 +156,7 @@ class SimSwitchAccessibilityService : AccessibilityService() {
     private fun clearPending() {
         pendingLabel = null
         pendingSubId = -1
+        pendingSlotIndex = -1
     }
 
     override fun onInterrupt() = Unit
@@ -150,6 +169,8 @@ class SimSwitchAccessibilityService : AccessibilityService() {
 
     private companion object {
         const val SETTLE_MS = 1_200L
+        const val TIMEOUT_MS = 8_000L
         const val MAX_SCROLL_ATTEMPTS = 6
+        const val TAP_DURATION_MS = 60L
     }
 }

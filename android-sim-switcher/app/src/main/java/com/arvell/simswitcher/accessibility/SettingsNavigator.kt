@@ -1,69 +1,109 @@
 package com.arvell.simswitcher.accessibility
 
+import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * Heuristics for finding and clicking the right node inside the system Settings
- * "SIMs / Mobile data" screen.
+ * Heuristics for locating and clicking the right node inside the system Settings
+ * to switch the mobile-data SIM.
  *
- * IMPORTANT: the Settings UI layout is **OEM- and version-specific** (AOSP,
- * One UI, MIUI, ColorOS, itelOS/HiOS … each differ). There is no public, stable
- * API to switch the data SIM from a normal app, which is exactly why we drive
- * the UI. The matchers below are intentionally label-based and fuzzy so they
- * survive minor layout changes, but real devices will need tuning — keep the
- * matcher lists in one place here.
+ * There is no public, stable API to switch the data SIM from a normal app, so we
+ * drive the Settings UI. Layout is OEM/version-specific, hence the heuristics.
  *
- * TUNED FOR: itel P55 (Transsion itelOS, Android 13) and Arabic/English locales.
- * Transsion phones (itel/Tecno/Infinix) use the standard `com.android.settings`
- * package. The data-SIM control there is the "Mobile data" / "بيانات الجوال"
- * row inside "SIM cards & mobile networks", which opens a SIM chooser.
+ * TUNED FOR: itel P55 (Transsion itelOS, Android 13). On this device the data
+ * SIM is chosen on the "SIM & Network Settings" screen via a *segmented control*
+ * under the "Mobile Data" header whose buttons are labelled by SLOT NUMBER
+ * ("1", "2") — not by carrier name. Crucially, identical "1"/"2" buttons also
+ * appear under SMS and Calls, so we scope the search to the vertical band
+ * between the "Mobile Data" header and the next header ("SMS"/"Calls").
  */
 object SettingsNavigator {
 
-    /**
-     * Labels that identify the "use this SIM for mobile data" control / the
-     * screen that contains it. Bilingual (English + Arabic) because the device
-     * Settings may be in either language. Matching is case-insensitive substring.
-     */
-    private val DATA_SIM_KEYWORDS = listOf(
-        // English (AOSP / Transsion)
-        "mobile data", "cellular data", "data sim", "preferred sim for data",
-        "mobile data preferred", "data preference", "use sim for data",
-        "sim cards & mobile networks", "sim cards", "sim management",
-        "mobile network", "data service",
+    /** Entries on the way to the data-SIM screen (Settings home → SIM screen). */
+    private val NAVIGATION_KEYWORDS = listOf(
+        "SIM & Network Settings", "SIM cards & mobile networks", "SIM card & mobile data",
+        "SIM management", "SIM cards", "Mobile network",
         // Arabic
-        "بيانات الجوال", "بيانات الهاتف المحمول", "بيانات الموبايل", "البيانات الخلوية",
-        "بيانات الهاتف", "بيانات الجوّال", "بيانات", "الشبكة المحمولة", "الشبكة الخلوية",
-        "بطاقات SIM", "بطاقات sim والشبكات المحمولة", "إدارة بطاقة SIM", "إدارة شرائح SIM",
-        "شرائح SIM",
+        "إعدادات SIM والشبكة", "بطاقات SIM والشبكات المحمولة", "إدارة بطاقة SIM",
+        "بطاقات SIM", "الشبكة المحمولة",
     )
 
-    /**
-     * Find a clickable node whose visible text contains [label] (the target SIM
-     * name), preferring nodes that sit near a data-related control.
-     */
-    fun findSimOptionByLabel(root: AccessibilityNodeInfo?, label: String): AccessibilityNodeInfo? {
-        root ?: return null
-        if (label.isBlank()) return null
-        val matches = root.findAccessibilityNodeInfosByText(label) ?: return null
-        // Prefer an actually clickable ancestor.
-        for (node in matches) {
-            val clickable = firstClickable(node)
-            if (clickable != null) return clickable
-        }
-        return matches.firstOrNull()
-    }
+    /** The header above the data-SIM segmented control. */
+    private val MOBILE_DATA_HEADERS = listOf(
+        "Mobile Data", "Mobile data", "Cellular data", "Data service",
+        // Arabic
+        "بيانات الجوال", "بيانات الهاتف المحمول", "البيانات الخلوية", "بيانات الجوّال",
+    )
 
-    /** Find the row/entry that opens data-SIM selection, by keyword. */
-    fun findDataSettingEntry(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+    /** Headers of the sections that follow Mobile Data; used as a lower bound. */
+    private val BOUNDARY_HEADERS = listOf(
+        "SMS", "Calls", "Call", "Data & Security",
+        // Arabic
+        "الرسائل", "رسائل", "المكالمات", "مكالمات", "البيانات والأمان",
+    )
+
+    fun click(node: AccessibilityNodeInfo?): Boolean =
+        node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+
+    /** An entry that drills toward the data-SIM screen (e.g. from Settings home). */
+    fun findNavigationEntry(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
         root ?: return null
-        for (keyword in DATA_SIM_KEYWORDS) {
+        for (keyword in NAVIGATION_KEYWORDS) {
             val nodes = root.findAccessibilityNodeInfosByText(keyword) ?: continue
-            for (node in nodes) {
-                firstClickable(node)?.let { return it }
-            }
+            for (node in nodes) firstClickable(node)?.let { return it }
         }
         return null
+    }
+
+    /**
+     * Find the clickable button that selects [slot1Based] (1 or 2) for mobile
+     * data, scoped to the band beneath the "Mobile Data" header.
+     *
+     * Match order: (1) the slot-number text within the band, (2) the carrier
+     * [label] text, (3) left-to-right position among clickables in the band.
+     */
+    fun findDataSlotButton(
+        root: AccessibilityNodeInfo?,
+        slot1Based: Int,
+        label: String,
+    ): AccessibilityNodeInfo? {
+        root ?: return null
+        val header = findFirstByTexts(root, MOBILE_DATA_HEADERS) ?: return null
+        val headerRect = Rect().also { header.getBoundsInScreen(it) }
+
+        // Lower boundary: top of the next section header below Mobile Data.
+        val lower = BOUNDARY_HEADERS
+            .mapNotNull { findFirstByTexts(root, listOf(it)) }
+            .map { Rect().also { r -> it.getBoundsInScreen(r) } }
+            .filter { it.top >= headerRect.bottom }
+            .minByOrNull { it.top }
+            ?.top ?: Int.MAX_VALUE
+
+        val all = collectAll(root)
+        fun inBand(node: AccessibilityNodeInfo): Boolean {
+            val r = Rect().also { node.getBoundsInScreen(it) }
+            return r.centerY() > headerRect.bottom && r.centerY() < lower
+        }
+
+        // (1) Slot-number text inside the band → its clickable ancestor.
+        all.firstOrNull { inBand(it) && textOrDesc(it).trim() == slot1Based.toString() }
+            ?.let { return firstClickable(it) ?: it }
+
+        // (1b) Some ROMs expose "SIM 1"/"SIM 2" as the content description.
+        all.firstOrNull { inBand(it) && textOrDesc(it).contains("SIM $slot1Based", ignoreCase = true) }
+            ?.let { return firstClickable(it) ?: it }
+
+        // (2) Carrier label (e.g. "MTN"/"Syriatel") if the button exposes it.
+        if (label.isNotBlank()) {
+            all.firstOrNull { inBand(it) && textOrDesc(it).contains(label, ignoreCase = true) }
+                ?.let { return firstClickable(it) ?: it }
+        }
+
+        // (3) Positional: clickable nodes in the band, ordered left→right.
+        val clickablesInBand = all
+            .filter { inBand(it) && it.isClickable }
+            .sortedBy { Rect().also { r -> it.getBoundsInScreen(r) }.left }
+        return clickablesInBand.getOrNull(slot1Based - 1)
     }
 
     /** Walk up from [node] to the nearest clickable ancestor (inclusive). */
@@ -78,25 +118,50 @@ object SettingsNavigator {
         return null
     }
 
-    fun click(node: AccessibilityNodeInfo?): Boolean =
-        node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+    /** Centre point of a node in screen coordinates, for a gesture-tap fallback. */
+    fun centerOf(node: AccessibilityNodeInfo): Pair<Int, Int> {
+        val r = Rect().also { node.getBoundsInScreen(it) }
+        return r.centerX() to r.centerY()
+    }
 
-    /**
-     * Find the first scrollable container in the tree, so long Settings pages
-     * (where the data-SIM row may be below the fold) can be scrolled into view.
-     */
     fun findScrollable(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
         root ?: return null
         if (root.isScrollable) return root
         for (i in 0 until root.childCount) {
-            val found = findScrollable(root.getChild(i))
-            if (found != null) return found
+            findScrollable(root.getChild(i))?.let { return it }
         }
         return null
     }
 
     fun scrollForward(node: AccessibilityNodeInfo?): Boolean =
         node?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) == true
+
+    private fun findFirstByTexts(
+        root: AccessibilityNodeInfo,
+        keywords: List<String>,
+    ): AccessibilityNodeInfo? {
+        for (keyword in keywords) {
+            val nodes = root.findAccessibilityNodeInfosByText(keyword) ?: continue
+            // Prefer an exact (case-insensitive) text match for headers.
+            nodes.firstOrNull { textOrDesc(it).equals(keyword, ignoreCase = true) }?.let { return it }
+            nodes.firstOrNull()?.let { return it }
+        }
+        return null
+    }
+
+    private fun collectAll(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val out = ArrayList<AccessibilityNodeInfo>()
+        fun dfs(node: AccessibilityNodeInfo?) {
+            node ?: return
+            out.add(node)
+            for (i in 0 until node.childCount) dfs(node.getChild(i))
+        }
+        dfs(root)
+        return out
+    }
+
+    private fun textOrDesc(node: AccessibilityNodeInfo): String =
+        node.text?.toString() ?: node.contentDescription?.toString() ?: ""
 
     private const val MAX_ASCEND = 6
 }

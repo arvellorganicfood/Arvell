@@ -71,23 +71,37 @@ cd android-sim-switcher
 
 ## Device tuning: itel P55 (Android 13)
 
-itel phones run **itelOS/HiOS** (Transsion) on top of Android 13 and use the
-standard `com.android.settings` package, so the accessibility approach works.
-`SettingsNavigator` is tuned for this device:
+itel phones run **itelOS** (Transsion) on top of Android 13 and use the standard
+`com.android.settings` package, so the accessibility approach works.
+`SettingsNavigator` is tuned for the **actual** on-device UI:
 
-- **Bilingual matching (Arabic + English).** The data-SIM row is matched against
-  both `Mobile data` and `بيانات الجوال` / `بيانات الهاتف المحمول` etc., so it
-  works whether the phone Settings language is Arabic or English.
-- **Auto-scroll.** The "Mobile data" control sits inside *SIM cards & mobile
-  networks*, sometimes below the fold; the service scrolls to bring it into view.
+```
+Settings home ──tap──▶ "SIM & Network Settings" ──▶ section "Mobile Data"
+                                                     [ 1 ] [ 2 ]   ← segmented toggle
+```
+
+Key facts that shaped the logic (verified from device screenshots):
+
+- The data SIM is chosen by a **segmented control labelled by slot number**
+  (`1`, `2`) under the **"Mobile Data"** header — *not* by carrier name. On the
+  test device, slot 1 = MTN, slot 2 = Syriatel (the app reads this mapping from
+  the system, nothing is hard-coded).
+- Identical `1`/`2` buttons also appear under **SMS** and **Calls**, so the
+  navigator scopes the search to the vertical band between the "Mobile Data"
+  header and the next header, then taps the button for the target slot.
+- The target button is tapped via node-click, with a **gesture-tap fallback**
+  (using on-screen coordinates) for custom toggle widgets that don't expose a
+  click action.
+- Matching is **bilingual (English + Arabic)** for both the navigation entry and
+  the "Mobile Data" header, so it works in either Settings language.
 
 Manual path on this device (for reference / fallback):
-`Settings → SIM cards & mobile networks → Mobile data → choose SIM`
-(`الإعدادات ← بطاقات SIM والشبكات المحمولة ← بيانات الجوال ← اختر الشريحة`).
+`Settings → SIM & Network Settings → Mobile Data → tap SIM 1 or 2`
+(`الإعدادات ← إعدادات SIM والشبكة ← بيانات الجوال ← اختر 1 أو 2`).
 
-> If auto-switching still can't find the control, open that screen once yourself
-> and note the exact wording of the data row, then add it to `DATA_SIM_KEYWORDS`
-> in `SettingsNavigator.kt`.
+> If auto-switching still can't find the control, note the exact header wording
+> on your device and add it to `MOBILE_DATA_HEADERS` / `NAVIGATION_KEYWORDS` in
+> `SettingsNavigator.kt`.
 
 ## Limitations & next steps
 
