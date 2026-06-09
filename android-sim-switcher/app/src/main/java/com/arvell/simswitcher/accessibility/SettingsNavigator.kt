@@ -7,18 +7,35 @@ import android.view.accessibility.AccessibilityNodeInfo
  * "SIMs / Mobile data" screen.
  *
  * IMPORTANT: the Settings UI layout is **OEM- and version-specific** (AOSP,
- * One UI, MIUI, ColorOS … each differ). There is no public, stable API to
- * switch the data SIM from a normal app, which is exactly why we drive the UI.
- * The matchers below are intentionally label-based and fuzzy so they survive
- * minor layout changes, but real devices will need tuning — keep the matcher
- * lists in one place here.
+ * One UI, MIUI, ColorOS, itelOS/HiOS … each differ). There is no public, stable
+ * API to switch the data SIM from a normal app, which is exactly why we drive
+ * the UI. The matchers below are intentionally label-based and fuzzy so they
+ * survive minor layout changes, but real devices will need tuning — keep the
+ * matcher lists in one place here.
+ *
+ * TUNED FOR: itel P55 (Transsion itelOS, Android 13) and Arabic/English locales.
+ * Transsion phones (itel/Tecno/Infinix) use the standard `com.android.settings`
+ * package. The data-SIM control there is the "Mobile data" / "بيانات الجوال"
+ * row inside "SIM cards & mobile networks", which opens a SIM chooser.
  */
 object SettingsNavigator {
 
-    /** Labels that identify the "use this SIM for mobile data" control. */
+    /**
+     * Labels that identify the "use this SIM for mobile data" control / the
+     * screen that contains it. Bilingual (English + Arabic) because the device
+     * Settings may be in either language. Matching is case-insensitive substring.
+     */
     private val DATA_SIM_KEYWORDS = listOf(
+        // English (AOSP / Transsion)
         "mobile data", "cellular data", "data sim", "preferred sim for data",
         "mobile data preferred", "data preference", "use sim for data",
+        "sim cards & mobile networks", "sim cards", "sim management",
+        "mobile network", "data service",
+        // Arabic
+        "بيانات الجوال", "بيانات الهاتف المحمول", "بيانات الموبايل", "البيانات الخلوية",
+        "بيانات الهاتف", "بيانات الجوّال", "بيانات", "الشبكة المحمولة", "الشبكة الخلوية",
+        "بطاقات SIM", "بطاقات sim والشبكات المحمولة", "إدارة بطاقة SIM", "إدارة شرائح SIM",
+        "شرائح SIM",
     )
 
     /**
@@ -27,6 +44,7 @@ object SettingsNavigator {
      */
     fun findSimOptionByLabel(root: AccessibilityNodeInfo?, label: String): AccessibilityNodeInfo? {
         root ?: return null
+        if (label.isBlank()) return null
         val matches = root.findAccessibilityNodeInfosByText(label) ?: return null
         // Prefer an actually clickable ancestor.
         for (node in matches) {
@@ -62,6 +80,23 @@ object SettingsNavigator {
 
     fun click(node: AccessibilityNodeInfo?): Boolean =
         node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+
+    /**
+     * Find the first scrollable container in the tree, so long Settings pages
+     * (where the data-SIM row may be below the fold) can be scrolled into view.
+     */
+    fun findScrollable(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        root ?: return null
+        if (root.isScrollable) return root
+        for (i in 0 until root.childCount) {
+            val found = findScrollable(root.getChild(i))
+            if (found != null) return found
+        }
+        return null
+    }
+
+    fun scrollForward(node: AccessibilityNodeInfo?): Boolean =
+        node?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) == true
 
     private const val MAX_ASCEND = 6
 }

@@ -32,6 +32,7 @@ class SimSwitchAccessibilityService : AccessibilityService() {
 
     @Volatile private var pendingLabel: String? = null
     @Volatile private var pendingSubId: Int = -1
+    @Volatile private var scrollAttempts: Int = 0
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -46,6 +47,7 @@ class SimSwitchAccessibilityService : AccessibilityService() {
     private suspend fun handleRequest(request: SwitchRequestBus.SwitchRequest) {
         pendingLabel = request.targetLabel
         pendingSubId = request.targetSubId
+        scrollAttempts = 0
         openMobileNetworkSettings()
         // Give Settings time to render; the actual click happens in onAccessibilityEvent
         // as windows change, but we also attempt once after a short delay as a fallback.
@@ -95,6 +97,20 @@ class SimSwitchAccessibilityService : AccessibilityService() {
         if (entry != null) {
             SettingsNavigator.click(entry)
             // Next window change will re-enter attemptSwitch() and find the SIM option.
+            return
+        }
+
+        // Target not visible yet (e.g. the row is below the fold on the itelOS
+        // "SIM cards & mobile networks" page): scroll and let the next content
+        // change re-trigger us. Bounded so we never loop forever.
+        if (scrollAttempts < MAX_SCROLL_ATTEMPTS) {
+            val scrollable = SettingsNavigator.findScrollable(root)
+            if (scrollable != null && SettingsNavigator.scrollForward(scrollable)) {
+                scrollAttempts++
+                return
+            }
+        } else {
+            reportFailure("Could not locate the data-SIM control automatically — switch manually")
         }
     }
 
@@ -134,5 +150,6 @@ class SimSwitchAccessibilityService : AccessibilityService() {
 
     private companion object {
         const val SETTLE_MS = 1_200L
+        const val MAX_SCROLL_ATTEMPTS = 6
     }
 }
