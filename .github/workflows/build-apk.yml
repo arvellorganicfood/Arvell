@@ -1,0 +1,47 @@
+name: Build APK
+
+# Builds the debug APK in the cloud and uploads it as a downloadable artifact,
+# so it can be installed on a phone without a local Android Studio setup.
+on:
+  push:
+    branches:
+      - claude/dual-sim-network-switching-q2gih9
+    paths:
+      - 'android-sim-switcher/**'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-sim-switcher
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-data-switcher-debug-apk
+          path: android-sim-switcher/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
