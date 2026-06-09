@@ -25,6 +25,7 @@ import com.arvell.simswitcher.core.SimInfoProvider
 import com.arvell.simswitcher.data.SettingsRepository
 import com.arvell.simswitcher.model.SimInfo
 import com.arvell.simswitcher.service.SimMonitorService
+import com.arvell.simswitcher.service.SwitchRequestBus
 import kotlinx.coroutines.launch
 
 /**
@@ -60,17 +61,29 @@ private fun MainScreen() {
     var hasPhonePerm by remember { mutableStateOf(simInfo.hasPhonePermission()) }
     var sims by remember { mutableStateOf<List<SimInfo>>(emptyList()) }
     var accessibilityOn by remember { mutableStateOf(isAccessibilityEnabled(context)) }
+    var dataSubId by remember { mutableStateOf(simInfo.activeDataSubId()) }
+    var manualMsg by remember { mutableStateOf<String?>(null) }
 
     val permLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
         hasPhonePerm = simInfo.hasPhonePermission()
         sims = simInfo.activeSims()
+        dataSubId = simInfo.activeDataSubId()
     }
 
     // Refresh transient state when returning to the screen.
     LaunchedEffect(Unit) {
         if (hasPhonePerm) sims = simInfo.activeSims()
+        dataSubId = simInfo.activeDataSubId()
+    }
+
+    // Surface switch outcomes (manual or automatic) and refresh the active data SIM.
+    LaunchedEffect(Unit) {
+        SwitchRequestBus.results.collect { r ->
+            manualMsg = if (r.success) "Switch command sent ✓" else "Switch failed: ${r.detail}"
+            dataSubId = simInfo.activeDataSubId()
+        }
     }
 
     Scaffold(topBar = { TopAppBar(title = { Text("SIM Data Switcher") }) }) { padding ->
@@ -120,6 +133,30 @@ private fun MainScreen() {
                     sims = sims,
                     primarySubId = config?.primarySubId ?: -1,
                     onPick = { sub -> scope.launch { settings.update { it.copy(primarySubId = sub) } } },
+                )
+
+                SwitchNowCard(
+                    sims = sims,
+                    currentDataSubId = dataSubId,
+                    accessibilityOn = accessibilityOn,
+                    lastMessage = manualMsg,
+                    onSwitch = { sim ->
+                        manualMsg = "Switching data to ${sim.label}…"
+                        scope.launch {
+                            SwitchRequestBus.requestSwitch(
+                                SwitchRequestBus.SwitchRequest(
+                                    targetSubId = sim.subscriptionId,
+                                    targetSlotIndex = sim.slotIndex,
+                                    targetLabel = sim.label,
+                                    reason = "Manual switch",
+                                ),
+                            )
+                        }
+                    },
+                    onRefresh = {
+                        sims = simInfo.activeSims()
+                        dataSubId = simInfo.activeDataSubId()
+                    },
                 )
             }
 
@@ -190,6 +227,65 @@ private fun SimPicker(sims: List<SimInfo>, primarySubId: Int, onPick: (Int) -> U
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RadioButton(selected = sim.subscriptionId == primarySubId, onClick = { onPick(sim.subscriptionId) })
                 Text("${sim.label} (slot ${sim.slotIndex + 1})")
+            }
+        }
+    }
+}
+
+/**
+ * Manual "switch now" tester: one tap asks the accessibility service to make
+ * the chosen SIM the data SIM, so the switch flow can be verified without
+ * waiting for a real signal drop. Requires the accessibility service enabled.
+ */
+@Composable
+private fun SwitchNowCard(
+    sims: List<SimInfo>,
+    currentDataSubId: Int,
+    accessibilityOn: Boolean,
+    lastMessage: String?,
+    onSwitch: (SimInfo) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val current = sims.firstOrNull { it.subscriptionId == currentDataSubId }
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Switch now (test)", style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = onRefresh) { Text("Refresh") }
+            }
+            Text(
+                "Current data SIM: ${current?.let { "${it.label} (slot ${it.slotIndex + 1})" } ?: "unknown"}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+
+            if (!accessibilityOn) {
+                Text(
+                    "Enable the accessibility service (step 2) to switch.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
+            sims.forEach { sim ->
+                val isCurrent = sim.subscriptionId == currentDataSubId
+                Button(
+                    onClick = { onSwitch(sim) },
+                    enabled = accessibilityOn && !isCurrent,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (isCurrent) "Data on ${sim.label} (active)"
+                        else "Switch data to ${sim.label} (slot ${sim.slotIndex + 1})",
+                    )
+                }
+            }
+
+            lastMessage?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall)
             }
         }
     }

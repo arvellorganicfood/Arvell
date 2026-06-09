@@ -57,7 +57,10 @@ NetworkQualityMonitor ──▶ SwitchDecisionEngine ──▶ SwitchRequestBus 
 1. Grant phone permission.
 2. Enable the **SIM Data Switcher** accessibility service in system settings.
 3. Pick your **primary** SIM and tune the signal / internet thresholds.
-4. Tap **Start auto-switching**.
+4. **Switch now (test):** tap *Switch data to <SIM>* to verify the switch flow
+   end-to-end with one tap — no need to wait for a real signal drop. The card
+   shows the current data SIM and the result of the attempt.
+5. Tap **Start auto-switching** to run the automatic monitor.
 
 ## Build
 
