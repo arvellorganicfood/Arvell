@@ -80,37 +80,46 @@ object SettingsNavigator {
             ?.top ?: Int.MAX_VALUE
 
         val all = collectAll(root)
+        fun rectOf(n: AccessibilityNodeInfo) = Rect().also { n.getBoundsInScreen(it) }
         fun inBand(node: AccessibilityNodeInfo): Boolean {
-            val r = Rect().also { node.getBoundsInScreen(it) }
+            val r = rectOf(node)
             return r.centerY() > headerRect.bottom && r.centerY() < lower
         }
 
-        // (1) Slot-number text inside the band → its clickable ancestor.
+        // (1) Explicit slot-number / "SIM n" / carrier text, if the ROM exposes it.
         all.firstOrNull { inBand(it) && textOrDesc(it).trim() == slot1Based.toString() }
             ?.let { return firstClickable(it) ?: it }
-
-        // (1b) Some ROMs expose "SIM 1"/"SIM 2" as the content description.
         all.firstOrNull { inBand(it) && textOrDesc(it).contains("SIM $slot1Based", ignoreCase = true) }
             ?.let { return firstClickable(it) ?: it }
-
-        // (2) Carrier label (e.g. "MTN"/"Syriatel") if the button exposes it.
         if (label.isNotBlank()) {
             all.firstOrNull { inBand(it) && textOrDesc(it).contains(label, ignoreCase = true) }
                 ?.let { return firstClickable(it) ?: it }
         }
 
-        // (3) Positional: the segmented control sits directly under the header
-        // and is horizontally aligned with it. Other clickable rows in the band
-        // (e.g. a SIM card tile off to the side) are excluded by requiring the
-        // candidate's horizontal centre to fall within the header's x-span.
-        val clickablesInBand = all
-            .filter { node ->
-                if (!node.isClickable || !inBand(node)) return@filter false
-                val r = Rect().also { node.getBoundsInScreen(it) }
-                r.centerX() in headerRect.left..headerRect.right
+        // (2) Structural: the data toggle is the largest set of equal-size,
+        // same-top clickable nodes in the band (the segments). A spurious side
+        // row differs in top/height and is naturally excluded. This is robust to
+        // the toggle's absolute position, which varies between layouts.
+        val bandClickables = all.filter { it.isClickable && inBand(it) }
+        val segments = bandClickables
+            .groupBy { val r = rectOf(it); r.top to r.height() }
+            .values
+            .filter { it.size >= 2 }
+            .maxByOrNull { it.size }
+
+        if (segments != null) {
+            // We always switch to the *other* SIM, so prefer the segment that is
+            // not currently selected, when the ROM exposes selection state.
+            val selected = segments.firstOrNull { it.isSelected || it.isChecked }
+            if (segments.size == 2 && selected != null) {
+                return segments.firstOrNull { it !== selected }
             }
-            .sortedBy { Rect().also { r -> it.getBoundsInScreen(r) }.left }
-        return clickablesInBand.getOrNull(slot1Based - 1)
+            // Otherwise map by position: left→right = slot order.
+            return segments.sortedBy { rectOf(it).left }.getOrNull(slot1Based - 1)
+        }
+
+        // (3) Fallback: positional among all clickable nodes in the band.
+        return bandClickables.sortedBy { rectOf(it).left }.getOrNull(slot1Based - 1)
     }
 
     /** Walk up from [node] to the nearest clickable ancestor (inclusive). */
@@ -193,11 +202,16 @@ object SettingsNavigator {
         val r = Rect().also { node.getBoundsInScreen(it) }
         val cls = node.className?.toString()?.substringAfterLast('.').orEmpty()
         return buildString {
-            append(if (node.isClickable) "[CLICK] " else "[     ] ")
+            append('[')
+            append(if (node.isClickable) "C" else " ")
+            append(if (node.isSelected) "S" else " ")
+            append(if (node.isChecked) "K" else " ")
+            append("] ")
             append(cls)
             if (text.isNotBlank()) append(" text='").append(text).append('\'')
             if (desc.isNotBlank()) append(" desc='").append(desc).append('\'')
             if (id.isNotBlank()) append(" id=").append(id)
+            append(" children=").append(node.childCount)
             append(" @").append(r.toShortString())
         }
     }
