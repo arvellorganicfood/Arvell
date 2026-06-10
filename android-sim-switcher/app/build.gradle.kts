@@ -16,6 +16,18 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
+    // A committed debug keystore (well-known, non-secret credentials) so every
+    // CI build is signed with the SAME key. Without this each build gets a fresh
+    // random debug key and updates fail with a signature mismatch.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
