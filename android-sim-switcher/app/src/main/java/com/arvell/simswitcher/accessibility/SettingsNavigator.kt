@@ -99,9 +99,16 @@ object SettingsNavigator {
                 ?.let { return firstClickable(it) ?: it }
         }
 
-        // (3) Positional: clickable nodes in the band, ordered left→right.
+        // (3) Positional: the segmented control sits directly under the header
+        // and is horizontally aligned with it. Other clickable rows in the band
+        // (e.g. a SIM card tile off to the side) are excluded by requiring the
+        // candidate's horizontal centre to fall within the header's x-span.
         val clickablesInBand = all
-            .filter { inBand(it) && it.isClickable }
+            .filter { node ->
+                if (!node.isClickable || !inBand(node)) return@filter false
+                val r = Rect().also { node.getBoundsInScreen(it) }
+                r.centerX() in headerRect.left..headerRect.right
+            }
             .sortedBy { Rect().also { r -> it.getBoundsInScreen(r) }.left }
         return clickablesInBand.getOrNull(slot1Based - 1)
     }
